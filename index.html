@@ -183,8 +183,6 @@ function addDragControlToObjects()
     objects.push(scene.getObjectByName("Teapot"));
     objects.push(eyeScene.getObjectByName("Head"));
     
-	//console.log(objects); 
-	
     var controls = new DragControls( objects, camera, renderer.domElement );
     controls.addEventListener( 'hoveron', function ( event ) 
 		{
@@ -248,8 +246,27 @@ function createRenderer()
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.xr.enabled = true;
-    document.body.appendChild(VRButton.createButton(renderer));
+    renderer.xr.setReferenceSpaceType('local-floor');
+    const vrButton = VRButton.createButton(renderer);
+    vrButton.onclick = startXR;
+    document.body.appendChild(vrButton);
     document.body.appendChild(renderer.domElement);
+}
+
+async function startXR() {
+    if (xrSession) return;
+    try {
+        xrSession = await navigator.xr.requestSession('immersive-vr', {
+            optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+        });
+        renderer.xr.setSession(xrSession);
+        setupControllers();
+        xrSession.addEventListener('end', () => {
+            xrSession = null;
+        });
+    } catch (err) {
+        console.error("Failed to start XR session:", err);
+    }
 }
 
 function enableOrbitCamera(cam, renderer)
@@ -465,10 +482,8 @@ function doRelease() {
     }
 }
 
-// refresh function
-var animate = function () {
-    var gl = renderer.getContext();
-    renderer.setAnimationLoop(animate);
+function renderScene() {
+    const gl = renderer.getContext();
 
     // 1. render scene objects
 	renderer.setClearColor(0x808080);
@@ -534,13 +549,33 @@ var animate = function () {
         }
         frustumLines = [];
     }
+}
 
-    if (selectedObject && grabbingController) {
-        let controllerPos = new THREE.Vector3().setFromMatrixPosition(grabbingController.matrixWorld);
-        selectedObject.position.copy(controllerPos).add(grabOffset);
+renderer.setAnimationLoop((time, frame) => {
+    if (frame) {
+        // VR mode
+        if (selectedObject && grabbingController) {
+            const inputSource = grabbingController.userData.selectedInputSource || grabbingController.inputSource; 
+            const pose = frame.getPose(grabbingController.targetRaySpace, renderer.xr.getReferenceSpace());
+            if (pose) {
+                const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+                const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
+                selectedObject.position.copy(pos).add(grabOffset);
+            }
+        }
+
+        // Sync virtual head with HMD pose
+        const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
+        if (pose) {
+            const view = pose.views[0];
+            const head = eyeScene.getObjectByName("Head");
+            head.position.fromArray(view.transform.position);
+            head.quaternion.fromArray(view.transform.orientation);
+        }
     }
-	
-};
+
+    renderScene();
+});
 
 
 window.addEventListener( 'keydown', function ( event ) 
@@ -616,8 +651,6 @@ createScene();		// some objects to test (teapot...)
 createCamera();		// a third-person camera
 enableOrbitCamera(camera, renderer);  // basic camera control
 addDragControlToObjects();	// allow some objects to be dragged
-setupControllers();
-animate();
 
 
 		</script>
