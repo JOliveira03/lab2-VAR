@@ -172,7 +172,7 @@ var raycaster = new THREE.Raycaster();
 var tempMatrix = new THREE.Matrix4();
 var selectedObject = null;
 var grabbingController = null;
-let grabOffset = new THREE.Vector3();
+var grabOffset = new THREE.Vector3();
 var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
 var frustumLines = [];
 var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
@@ -411,42 +411,47 @@ function cameraFromViewProj(view, proj)
 let controller1, controller2, controllerGrip1, controllerGrip2;
 function setupControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
-    // Controller 1 (right)
+
+    // Controller 1 (right hand)
     controller1 = renderer.xr.getController(0);
     controller1.add(buildLaser());
     scene.add(controller1);
     controllerGrip1 = renderer.xr.getControllerGrip(0);
     controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
     scene.add(controllerGrip1);
-    // Controller 2 (left)
+
+    // Controller 2 (left hand)
     controller2 = renderer.xr.getController(1);
     controller2.add(buildLaser());
     scene.add(controller2);
     controllerGrip2 = renderer.xr.getControllerGrip(1);
     controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
     scene.add(controllerGrip2);
-    // Grabbing (with offset)
+
     controller1.addEventListener('selectstart', () => doGrab(controller1));
     controller2.addEventListener('selectstart', () => doGrab(controller2));
-    controller1.addEventListener('selectend', () => doRelease());
-    controller2.addEventListener('selectend', () => doRelease());
+    controller1.addEventListener('selectend', doRelease);
+    controller2.addEventListener('selectend', doRelease);
 }
 
 function buildLaser() {
     const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)
+        new THREE.Vector3(0,0,0),
+        new THREE.Vector3(0,0,-1)
     ]);
     return new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xff0000 }));
 }
+
 function doGrab(controller) {
-    const objects = [scene.getObjectByName("Teapot"), eyeScene.getObjectByName("Head")].filter(obj => obj);
+    // List all objects you want to be "grab-able" here
+    const objects = [scene.getObjectByName("Teapot"), eyeScene.getObjectByName("Head")].filter(obj=>obj);
     tempMatrix.identity().extractRotation(controller.matrixWorld);
     raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix);
     const intersects = raycaster.intersectObjects(objects);
     if (intersects.length > 0) {
         selectedObject = intersects[0].object;
-        selectedObject.material.emissive.set(0x00ff00);
+        selectedObject.material.emissive.set(0x00ff00); // highlight
         grabbingController = controller;
         let controllerPos = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
         grabOffset.copy(selectedObject.position).sub(controllerPos);
@@ -461,83 +466,81 @@ function doRelease() {
     }
 }
 
+// refresh function
 var animate = function () {
     var gl = renderer.getContext();
     renderer.setAnimationLoop(animate);
 
-    // -- CAMERA MOVEMENT (left thumbstick, moves dolly) --
-    if (renderer.xr.isPresenting && dolly) {
-        let session = renderer.xr.getSession();
-        if (session) {
-            let inputSources = session.inputSources;
-            for (let source of inputSources) {
-                if (source && source.handedness === 'left' && source.gamepad && source.gamepad.axes.length >= 2) {
-                    let [x, y] = source.gamepad.axes;
-                    // Stick motion detected, move dolly
-                    if (Math.abs(x) > 0.1 || Math.abs(y) > 0.1) {
-                        let speed = 0.15;
-                        let quaternion = camera.quaternion.clone();
-                        // Forward/back (z), Left/right (x)
-                        let forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion).setY(0).normalize();
-                        let strafe = new THREE.Vector3(-1, 0, 0).applyQuaternion(quaternion).setY(0).normalize();
-                        dolly.position.add(forward.multiplyScalar(y * speed));
-                        dolly.position.add(strafe.multiplyScalar(x * speed));
-                    }
-                }
-            }
-        }
-    }
-    renderer.setClearColor(0x808080);
+    // 1. render scene objects
+	renderer.setClearColor(0x808080);
     renderer.clear();
     if (showScene)
         renderer.render(scene, camera);
-    for (let [index, displaySurface] of displaySurfaces.entries()) {
+    
+    // 2. render scene objects onto a texture, for each target
+    for (let [index, displaySurface] of displaySurfaces.entries())
+    {
         renderer.setRenderTarget(displaySurfaceTargets[index]);
         renderer.setClearColor(0x404040);
         renderer.clear();
 
-        // left eye on RED channel
+		// left eye on RED channel
         gl.colorMask(1, 0, 0, 0); 
-        var eye = getLeftEyePosition();
-        var view = displaySurface.viewMatrix(eye);
-        var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+		var eye = getLeftEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
         var leftCamera = cameraFromViewProj(view, proj);
         renderer.render(scene, leftCamera); 
-
-        // right eye on GREEN, BLUE channels
-        gl.colorMask(0, 1, 1, 0);
-        var eye = getRightEyePosition();
-        var view = displaySurface.viewMatrix(eye);
-        var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+    
+		// right eye on GREEN, BLUE channels
+		gl.colorMask(0, 1, 1, 0);
+		var eye = getRightEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
         var rightCamera = cameraFromViewProj(view, proj);
         renderer.clearDepth();
         renderer.render(scene, rightCamera); 
+		
         gl.colorMask(1, 1, 1, 0);
     }
+    // restore state
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000);
-
+  
+    // 3. render display surfaces as (textured) quads
     renderer.render(displaySurfaceScene, camera);
+	
+	// 4. render eyes
     renderer.render(eyeScene, camera);
 
-    // Update frustum lines
+    // 5. Update frustum lines if enabled
     if (showEyeFrustrum > 0) {
-        for (var line of frustumLines) eyeScene.remove(line);
+        // Remove old lines
+        for (var line of frustumLines) {
+            eyeScene.remove(line);
+        }
         frustumLines = [];
+        
+        // Determine which eye to use: 1 = left, 2 = right
         var eye = (showEyeFrustrum == 1) ? getLeftEyePosition() : getRightEyePosition();
+        
+        // Show only the selected surface
         var lines = displaySurfaces[currentSurface].showEyeFrustrum(eye);
         eyeScene.add(lines);
         frustumLines.push(lines);
     } else {
-        for (var line of frustumLines) eyeScene.remove(line);
+        // Remove all lines
+        for (var line of frustumLines) {
+            eyeScene.remove(line);
+        }
         frustumLines = [];
     }
 
-    // -- VR Grabbing with offset maintained --
     if (selectedObject && grabbingController) {
         let controllerPos = new THREE.Vector3().setFromMatrixPosition(grabbingController.matrixWorld);
         selectedObject.position.copy(controllerPos).add(grabOffset);
     }
+	
 };
 
 
@@ -611,9 +614,7 @@ createDisplaySurfaceTargets(); // Textures for the display surfaces
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
 createEyeScene();	// spheres representing head + eyes
 createScene();		// some objects to test (teapot...)
-dolly = new THREE.Group();
-dolly.add(camera);
-scene.add(dolly);
+createCamera();		// a third-person camera
 enableOrbitCamera(camera, renderer);  // basic camera control
 addDragControlToObjects();	// allow some objects to be dragged
 setupControllers();
