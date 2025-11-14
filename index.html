@@ -320,27 +320,27 @@ function createDisplaySurfaceScene()
         cube.name = displaySurface.name;
         if (displaySurface.name == "Left")
             cube.rotation.y = Math.PI / 2;
-       
-		if (displaySurface.name == "Right")
+        if (displaySurface.name == "Right")
             cube.rotation.y = - Math.PI / 2;
-			
-		if (displaySurface.name == "Floor")
-		{
+        if (displaySurface.name == "Floor") {
             cube.rotation.x =  Math.PI / 2;
-			cube.rotation.z =  Math.PI ;
-		}
-       
-	    var uHalf = u.clone().multiplyScalar(0.5);
-		var vHalf = v.clone().multiplyScalar(0.5);
-		var center = new THREE.Vector3().addVectors(origin, uHalf);
-		center.add(vHalf);
-		cube.position.set(center.x, center.y, center.z);
-		
+            cube.rotation.z =  Math.PI ;
+        }
+        var uHalf = u.clone().multiplyScalar(0.5);
+        var vHalf = v.clone().multiplyScalar(0.5);
+        var center = new THREE.Vector3().addVectors(origin, uHalf);
+        center.add(vHalf);
+        cube.position.set(center.x, center.y, center.z);
+        
         displaySurfaceScene.add(cube);
+
+        // ---- THE FIX: Also add to main scene for VR! ----
+        scene.add(cube); // Add each display surface mesh to your main scene
     }
     
     createLights(displaySurfaceScene);
 }
+
 
 
 function getCaveBoundsFromSurfaces() {
@@ -783,9 +783,9 @@ const PARTICLE_COUNT = 200;
 const bounds = getCaveBoundsFromSurfaces();
 const { mesh: particleCubes, positions, velocities, scales, min, max } = setupCubeParticles(PARTICLE_COUNT, bounds);
 createDisplaySurfaceTargets(); // Textures for the display surfaces
+createScene();		// some objects to test (teapot...)
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
 createEyeScene();	// spheres representing head + eyes
-createScene();		// some objects to test (teapot...)
 setupControllers();
 createCamera();		// a third-person camera
 enableOrbitCamera(camera, renderer);  // basic camera control
