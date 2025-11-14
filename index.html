@@ -7,7 +7,7 @@
 </head>
 <body>
 <div id="info">
-	version 2 CAVE Simulator. The head and teapot are draggable. <br />
+	CAVE Simulator. The head and teapot are draggable. <br />
 	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene | "F" toggle show frustrum of each eye | "G" toggle between surfaces (Front/Left/Right/Floor)   <br />
 </div>
 
@@ -341,35 +341,6 @@ function createDisplaySurfaceScene()
     createLights(displaySurfaceScene);
 }
 
-function addWallsToScene() {
-    for (const displaySurface of displaySurfaces) {
-        const u = displaySurface.u;
-        const v = displaySurface.v;
-        // Use PlaneGeometry for a simple wall
-        const geometry = new THREE.PlaneGeometry(u.length(), v.length());
-
-        // Use a simple color or material for now
-        const material = new THREE.MeshPhongMaterial({ color: displaySurface.color });
-        const wall = new THREE.Mesh(geometry, material);
-
-        wall.name = displaySurface.name;
-
-        // Set center position of the wall
-        const uHalf = u.clone().multiplyScalar(0.5);
-        const vHalf = v.clone().multiplyScalar(0.5);
-        const center = new THREE.Vector3().addVectors(displaySurface.origin, uHalf).add(vHalf);
-        wall.position.copy(center);
-
-        // Orient the wall using its u and v vectors
-        // This sets the wall's orientation based on your surface's axes
-        const normal = new THREE.Vector3().crossVectors(u, v).normalize();
-        wall.lookAt(center.clone().add(normal));
-
-        scene.add(wall);
-    }
-}
-
-
 function createDisplaySurfaceTargets()
 {
     const SIZE = 1024;  // texture resolution
@@ -585,19 +556,12 @@ function onSelectEnd(event) {
 }
 
 function getIntersections(controller) {
-    // Get the controller's world position and direction
-    const tempMatrix = new THREE.Matrix4();
-    tempMatrix.identity().extractRotation(controller.matrixWorld);
+    controller.updateMatrixWorld();
 
-    const rayOrigin = new THREE.Vector3();
-    rayOrigin.setFromMatrixPosition(controller.matrixWorld);
+    raycaster.setFromXRController(controller);
 
-    const rayDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
-
-    raycaster.set(rayOrigin, rayDirection);
     return raycaster.intersectObjects(group.children, false);
 }
-
 
 function intersectObjects(controller) {
     if (controller.userData.targetRayMode === 'screen') return;
@@ -805,7 +769,6 @@ createDisplaySurfaceTargets(); // Textures for the display surfaces
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
 createEyeScene();	// spheres representing head + eyes
 createScene();		// some objects to test (teapot...)
-addWallsToScene
 setupControllers();
 createCamera();		// a third-person camera
 enableOrbitCamera(camera, renderer);  // basic camera control
