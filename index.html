@@ -1,408 +1,798 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8">
-<title>CAVE + WebXR Simulator</title>
-<style>
-  body { margin:0; overflow:hidden; }
-  #info { position:absolute; top:0; left:0; padding:10px; background:rgba(0,0,0,0.5); color:#fff; font-family:sans-serif; }
-</style>
+<title>CAVE simulator</title>
+<link type="text/css" rel="stylesheet" href="main.css">
 </head>
 <body>
 <div id="info">
-  CAVE Simulator – <b>L</b> left eye | <b>R</b> right eye | <b>S</b> toggle scene |
-  <b>F</b> toggle frustum | <b>G</b> next surface | <b>Enter VR</b> button
+	CAVE Simulator. The head and teapot are draggable. <br />
+	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene | "F" toggle show frustrum of each eye | "G" toggle between surfaces (Front/Left/Right/Floor)   <br />
 </div>
 
+<!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
+for alternative installations -->
 <script type="importmap">
+    {
+        "imports": {
+        "three": "https://unpkg.com/three@0.139.2/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.139.2/examples/jsm/"
+        }
+    }
+</script>
+
+
+<script type ="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { DragControls } from 'three/addons/controls/DragControls.js';
+    import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+    const clock = new THREE.Clock();
+
+class DisplaySurface 
 {
-  "imports": {
-    "three": "https://unpkg.com/three@0.139.2/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.139.2/examples/jsm/"
-  }
+    constructor(name, origin, u_vector, v_vector, color) 
+    {
+        this.name = name;
+        this.origin = origin;
+        this.u = u_vector;
+        this.v = v_vector;
+        this.color = color;
+    }
+
+	viewMatrix(eye)
+    {
+        // norm (n = u × v)
+        var n = new THREE.Vector3().crossVectors(this.u, this.v).normalize();
+
+        // target: point from in direction of -norm
+        var target = new THREE.Vector3().addVectors(eye, n.clone().negate());
+
+        // up vector
+        var upVector = this.v.clone().normalize();
+
+        var mat = new THREE.Matrix4();
+        mat = mat.lookAt(eye, target, upVector); // solo rotación
+        var translate = new THREE.Matrix4().makeTranslation(-eye.x, -eye.y, -eye.z);
+        mat = mat.multiplyMatrices(mat, translate);
+
+        return mat;
+    }
+	
+    projectionMatrix(eye, znear, zfar) {
+        // Normalized wall axes
+        var u = this.u.clone().normalize();
+        var v = this.v.clone().normalize();
+        var n = new THREE.Vector3().crossVectors(u, v).normalize();
+
+        // Vectors from eye to three corners of the wall
+        var pa = this.origin.clone();            // lower-left corner (origin)
+        var pb = this.origin.clone().add(this.u); // lower-right (origin + u)
+        var pc = this.origin.clone().add(this.v); // upper-left  (origin + v)
+
+        var va = pa.clone().sub(eye);
+        var vb = pb.clone().sub(eye);
+        var vc = pc.clone().sub(eye);
+
+        // Distance from eye to screen (near plane)
+        var d = -va.dot(n);
+
+        // Frustum parameters at the near plane
+        var left   = va.dot(u) * znear / d;
+        var right  = vb.dot(u) * znear / d;
+        var bottom = va.dot(v) * znear / d;
+        var top    = vc.dot(v) * znear / d;
+
+        var projMat = new THREE.Matrix4().makePerspective(left, right, top, bottom, znear, zfar);
+        return projMat;
+    }
+
+    showEyeFrustrum(eye) {
+        var u = this.u.clone().normalize();
+        var v = this.v.clone().normalize();
+        var n = new THREE.Vector3().crossVectors(u, v).normalize();
+
+        // Vectors from eye to four corners of the wall
+        var pa = this.origin.clone(); // lower-left corner (origin)
+        var pb = this.origin.clone().add(this.u); // lower-right (origin + u)
+        var pc = this.origin.clone().add(this.v); // upper-left  (origin + v)
+        var pd = this.origin.clone().add(this.u).add(this.v); // upper-right (origin + u + v)
+        
+        // Create a group to hold both mesh and lines
+        var group = new THREE.Group();
+        
+        // Create 4 triangular surfaces from eye to each edge of the screen
+        var vertices = new Float32Array([
+            // Triangle 1: eye -> pa -> pb
+            eye.x, eye.y, eye.z,
+            pa.x, pa.y, pa.z,
+            pb.x, pb.y, pb.z,
+            
+            // Triangle 2: eye -> pb -> pd
+            eye.x, eye.y, eye.z,
+            pb.x, pb.y, pb.z,
+            pd.x, pd.y, pd.z,
+            
+            // Triangle 3: eye -> pd -> pc
+            eye.x, eye.y, eye.z,
+            pd.x, pd.y, pd.z,
+            pc.x, pc.y, pc.z,
+            
+            // Triangle 4: eye -> pc -> pa
+            eye.x, eye.y, eye.z,
+            pc.x, pc.y, pc.z,
+            pa.x, pa.y, pa.z,
+        ]);
+
+        var geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.computeVertexNormals();
+        
+        var material = new THREE.MeshBasicMaterial({
+            color: this.color,
+            transparent: true,
+            opacity: 0.15,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+        
+        var mesh = new THREE.Mesh(geometry, material);
+        group.add(mesh);
+        
+        // Add edge lines
+        var linePoints = new Float32Array([
+            eye.x, eye.y, eye.z,   pa.x, pa.y, pa.z,
+            eye.x, eye.y, eye.z,   pb.x, pb.y, pb.z,
+            eye.x, eye.y, eye.z,   pc.x, pc.y, pc.z,
+            eye.x, eye.y, eye.z,   pd.x, pd.y, pd.z,
+        ]);
+        
+        var lineGeometry = new THREE.BufferGeometry();
+        lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePoints, 3));
+        var lineMaterial = new THREE.LineBasicMaterial({color: this.color});
+        var lines = new THREE.LineSegments(lineGeometry, lineMaterial);
+        group.add(lines);
+
+        return group;
+    }
+    
 }
-</script>
 
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DragControls } from 'three/addons/controls/DragControls.js';
-import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
-import { VRButton } from 'three/addons/webxr/VRButton.js';
-import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
-const clock = new THREE.Clock();
+var renderer, scene, camera;
+var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
+var eyeCenter, eyeScene; 
+var orbitControl;
+var showScene = true;
+var tempMatrix = new THREE.Matrix4();
+var tempMatrix2 = new THREE.Matrix4();
+var selectionOffset = new THREE.Matrix4();
+var selectedObject = null;
+var grabbingController = null;
+var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
+var frustumLines = [];
+var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
+var controller1, controller2, controllerGrip1, controllerGrip2;
+let raycaster;
+var group;
+const intersected = [];
 
-/* --------------------------------------------------------------
-   DisplaySurface – exactly the mathematics from the slides
-   -------------------------------------------------------------- */
-class DisplaySurface {
-  constructor(name, origin, u, v, color) {
-    this.name = name;
-    this.origin = origin.clone();
-    this.u = u.clone();
-    this.v = v.clone();
-    this.color = color;
-  }
+function addDragControlToObjects()
+{
+    var objects = [];
+    objects.push(scene.getObjectByName("Teapot"));
+    objects.push(eyeScene.getObjectByName("Head"));
+    
+	//console.log(objects); 
+	
+    var controls = new DragControls( objects, camera, renderer.domElement );
+    controls.addEventListener( 'hoveron', function ( event ) 
+		{
+            orbitControl.enabled = false;
+        } );
+    controls.addEventListener( 'hoveroff', function ( event ) 
+	{
+            orbitControl.enabled = true;
+    } );
+	controls.addEventListener( 'dragstart', function ( event ) 
+		{
+            event.object.material.emissive.set( 0xaaaaaa );
+        } );
+    controls.addEventListener( 'dragend', function ( event ) 
+		{
+            event.object.material.emissive.set( 0x000000 );
+    } );
+}
 
-  /** view matrix (eye → surface) */
-  viewMatrix(eye) {
-    const n = new THREE.Vector3().crossVectors(this.u, this.v).normalize();      // normal
-    const target = eye.clone().sub(n);                                          // look along -n
-    const up = this.v.clone().normalize();
+function createEyeScene()
+{
+    var IPD = 6.8; 
+    eyeCenter = new THREE.Vector3(50, 20, 50);
+    // eye positions relative to the head
+    var eyeL = new THREE.Vector3( - IPD/2, 10, -6);
+    var eyeR = new THREE.Vector3( + IPD/2, 10, -6);
+    
+    eyeScene = new THREE.Scene();
 
-    const m = new THREE.Matrix4().lookAt(eye, target, up);
-    // keep only rotation part (remove translation)
-    m.setPosition(0,0,0);
-    // translate by -eye
-    const t = new THREE.Matrix4().makeTranslation(-eye.x, -eye.y, -eye.z);
-    return m.multiply(t);
-  }
+    // add sphere representing head
+    var geometry = new THREE.SphereGeometry( 10, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0xaaaaaa } );
+    var head = new THREE.Mesh( geometry, material );
+    head.name = "Head";
+    head.position.set(eyeCenter.x, eyeCenter.y, eyeCenter.z);
+    eyeScene.add(head);
 
-  /** off-axis projection matrix */
-  projectionMatrix(eye, zNear, zFar) {
-    const uN = this.u.clone().normalize();
-    const vN = this.v.clone().normalize();
-    const nN = new THREE.Vector3().crossVectors(uN, vN).normalize();
+    // add spheres representing L/R eyes
+    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
+    var sphere = new THREE.Mesh( geometry, material );
+    sphere.name = "EyeL";
+    sphere.position.set(eyeL.x, eyeL.y, eyeL.z);
+    head.add(sphere);
+	
+    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
+    var sphere = new THREE.Mesh( geometry, material );
+    sphere.name = "EyeR";
+    sphere.position.set(eyeR.x, eyeR.y, eyeR.z);
+	head.add(sphere);
+    
+    createLights(eyeScene);
+}
 
-    const pa = this.origin.clone();                         // lower-left
-    const pb = this.origin.clone().add(this.u);             // lower-right
-    const pc = this.origin.clone().add(this.v);             // upper-left
+function createRenderer()
+{
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true});    
+    renderer.autoClear = false; // we will do manual clearing, because of the two eyes rendering
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.xr.enabled = true;
+    document.body.appendChild(VRButton.createButton(renderer));
+    document.body.appendChild(renderer.domElement);
+}
 
-    const va = pa.clone().sub(eye);
-    const vb = pb.clone().sub(eye);
-    const vc = pc.clone().sub(eye);
+function enableOrbitCamera(cam, renderer)
+{
+    orbitControl = new OrbitControls(cam, renderer.domElement );
+    orbitControl.minDistance = 120;
+    orbitControl.maxDistance = 50000;
+}
 
-    const d = -va.dot(nN);                                 // distance to plane
+function createLights(scn)
+{
+    var ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+    scn.add(ambientLight);
+    var pointLight = new THREE.PointLight(0xffffff, 30, 0, 2);
+    pointLight.position.set(100, 200, 200);
+    pointLight.castShadow = true;
+	pointLight.position.z += 200;
+    scn.add(pointLight);
+    var dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    dirLight.position.set(200, 400, 300);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(2048, 2048);
+    dirLight.shadow.camera.near = 10;
+    dirLight.shadow.camera.far = 2000;
+    dirLight.shadow.radius = 2;
+    scn.add(dirLight);
+}
 
-    const l = va.dot(uN) * zNear / d;
-    const r = vb.dot(uN) * zNear / d;
-    const b = va.dot(vN) * zNear / d;
-    const t = vc.dot(vN) * zNear / d;
 
-    return new THREE.Matrix4().makePerspective(l, r, b, t, zNear, zFar);
-  }
+function createScene()
+{
+    scene = new THREE.Scene();
+    group = new THREE.Group();
 
-  /** helper – draw the viewing frustum for one eye */
-  frustumGroup(eye) {
-    const group = new THREE.Group();
+    var geometry = new TeapotGeometry( 40, 15);
+    var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
+    var teapot = new THREE.Mesh(geometry, material);
+    teapot.name = "Teapot";
+    teapot.position.z-=70;
 
-    const pa = this.origin.clone();
-    const pb = this.origin.clone().add(this.u);
-    const pc = this.origin.clone().add(this.v);
-    const pd = this.origin.clone().add(this.u).add(this.v);
+    group.add( teapot );
+    group.add( particleCubes );
+    scene.add( group );
+                
+    createLights(scene);
+}
 
-    // four triangular faces
-    const verts = new Float32Array([
-      eye.x,eye.y,eye.z, pa.x,pa.y,pa.z, pb.x,pb.y,pb.z,
-      eye.x,eye.y,eye.z, pb.x,pb.y,pb.z, pd.x,pd.y,pd.z,
-      eye.x,eye.y,eye.z, pd.x,pd.y,pd.z, pc.x,pc.y,pc.z,
-      eye.x,eye.y,eye.z, pc.x,pc.y,pc.z, pa.x,pa.y,pa.z
-    ]);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(verts,3));
-    geo.computeVertexNormals();
-    const mat = new THREE.MeshBasicMaterial({
-      color:this.color, side:THREE.DoubleSide,
-      transparent:true, opacity:0.15, depthWrite:false
+
+// create a scene with 3D objects representing the display surfaces
+function createDisplaySurfaceScene()
+{
+    displaySurfaceScene = new THREE.Scene();
+
+    // add display surfaces
+    for (var [index, displaySurface] of displaySurfaces.entries())
+    {
+        var origin = displaySurface.origin;
+        var u = displaySurface.u;
+        var v = displaySurface.v;
+  
+        var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
+        var material = new THREE.MeshPhongMaterial( {map: displaySurfaceTargets[index].texture} );
+        var cube = new THREE.Mesh( geometry, material );
+        cube.name = displaySurface.name;
+        if (displaySurface.name == "Left")
+            cube.rotation.y = Math.PI / 2;
+       
+		if (displaySurface.name == "Right")
+            cube.rotation.y = - Math.PI / 2;
+			
+		if (displaySurface.name == "Floor")
+		{
+            cube.rotation.x =  Math.PI / 2;
+			cube.rotation.z =  Math.PI ;
+		}
+       
+	    var uHalf = u.clone().multiplyScalar(0.5);
+		var vHalf = v.clone().multiplyScalar(0.5);
+		var center = new THREE.Vector3().addVectors(origin, uHalf);
+		center.add(vHalf);
+		cube.position.set(center.x, center.y, center.z);
+		
+        displaySurfaceScene.add(cube);
+    }
+    
+    createLights(displaySurfaceScene);
+}
+
+
+function getCaveBoundsFromSurfaces() {
+    const points = [];
+    for (const surf of displaySurfaces) {
+        points.push(
+            surf.origin.clone(),
+            surf.origin.clone().add(surf.u),
+            surf.origin.clone().add(surf.v),
+            surf.origin.clone().add(surf.u).add(surf.v)
+        );
+    }
+    let min = points[0].clone();
+    let max = points[0].clone();
+    for (const v of points) {
+        min.min(v);
+        max.max(v);
+    }
+    return {min, max};
+}
+
+
+function setupCubeParticles(cubeCount, bounds) {
+    const { min, max } = bounds;
+    const geometry = new THREE.BoxGeometry(6, 6, 6);
+    const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.8,
+        metalness: 0.2
     });
-    group.add(new THREE.Mesh(geo, mat));
+    const mesh = new THREE.InstancedMesh(geometry, material, cubeCount);
 
-    // edge lines
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([
-      eye,pa, eye,pb, eye,pc, eye,pd
-    ]);
-    const lineMat = new THREE.LineBasicMaterial({color:this.color});
-    group.add(new THREE.LineSegments(lineGeo, lineMat));
+    const positions = new Float32Array(cubeCount * 3);
+    const velocities = new Float32Array(cubeCount * 3);
+    const scales = new Float32Array(cubeCount);
+    const colors = [];
 
-    return group;
-  }
+    for (let i = 0; i < cubeCount; i++) {
+        positions[i * 3]     = Math.random() * (max.x - min.x) + min.x;
+        positions[i * 3 + 1] = Math.random() * (max.y - min.y) + min.y;
+        positions[i * 3 + 2] = Math.random() * (max.z - min.z) + min.z;
+        velocities[i * 3]     = (Math.random() - 0.5) * 0.2;
+        velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.2;
+        velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
+
+        scales[i] = Math.random() * 1.6 + 0.4; // (0.4–2) size
+        colors[i] = new THREE.Color(Math.random(), Math.random(), Math.random());
+        mesh.setColorAt(i, colors[i]);
+    }
+    mesh.instanceColor.needsUpdate = true;
+
+    return { mesh, positions, velocities, scales, colors, min, max };
 }
 
-/* --------------------------------------------------------------
-   Global objects
-   -------------------------------------------------------------- */
-let renderer, scene, camera, orbit;
-let surfaces = [], surfaceTargets = [], surfaceScene;
-let head, eyeL, eyeR, teapot;
-let showScene = true, showFrustum = 0, curSurf = 0;
-let frustumObjects = [];
-let controller1, controller2, grip1, grip2;
-let grabbed = null, grabController = null, grabOffset = new THREE.Vector3();
 
-/* --------------------------------------------------------------
-   Init
-   -------------------------------------------------------------- */
-function init() {
-  // renderer
-  renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.autoClear = false;
-  renderer.xr.enabled = true;
-  document.body.appendChild(renderer.domElement);
-  document.body.appendChild(VRButton.createButton(renderer));
-
-  // main scene (teapot)
-  scene = new THREE.Scene();
-  const teapotGeo = new TeapotGeometry(40,15);
-  const teapotMat = new THREE.MeshPhongMaterial({color:0xffffff});
-  teapot = new THREE.Mesh(teapotGeo, teapotMat);
-  teapot.name = 'Teapot';
-  teapot.position.set(0,0,-70);
-  scene.add(teapot);
-  addLights(scene);
-
-  // head + eyes
-  createHead();
-
-  // display surfaces (exact numbers from the assignment)
-  createSurfaces();
-
-  // render-targets for the four walls
-  surfaceTargets = surfaces.map(() => new THREE.WebGLRenderTarget(1024,1024));
-
-  // visual representation of the walls
-  createSurfaceScene();
-
-  // third-person camera
-  camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 10000);
-  camera.position.set(100,120,300);
-  orbit = new OrbitControls(camera, renderer.domElement);
-  orbit.minDistance = 50;
-  orbit.maxDistance = 1000;
-
-  // mouse drag on head / teapot
-  const dragObjs = [head, teapot];
-  const drag = new DragControls(dragObjs, camera, renderer.domElement);
-  drag.addEventListener('dragstart', e=>orbit.enabled=false);
-  drag.addEventListener('dragend',   e=>orbit.enabled=true);
-
-  // VR controllers
-  setupControllers();
-
-  // animate
-  renderer.setAnimationLoop(animate);
-
-  // UI
-  window.addEventListener('resize', onResize);
-  window.addEventListener('keydown', onKey);
+ 
+function createDisplaySurfaceTargets()
+{
+    const SIZE = 1024;  // texture resolution
+    displaySurfaceTargets = [];
+    
+    for (var v of displaySurfaces)       
+        displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
 }
-init();
 
-/* --------------------------------------------------------------
-   Helpers
-   -------------------------------------------------------------- */
-function addLights(scn) {
-  scn.add(new THREE.AmbientLight(0xffffff,0.3));
-  const dir = new THREE.DirectionalLight(0xffffff,2);
-  dir.position.set(200,400,300);
-  dir.castShadow = true;
-  scn.add(dir);
+function createCamera()
+{
+    camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
+    camera.position.set( 100, 100, 300 );
+    camera.lookAt( 0, 0, 0 );
 }
-function createHead() {
-  const IPD = 6.8;
-  head = new THREE.Group();
-  head.name = 'Head';
-  head.position.set(50,20,50);
-  scene.add(head);
 
-  const headGeo = new THREE.SphereGeometry(10,32,16);
-  const headMat = new THREE.MeshPhongMaterial({color:0xaaaaaa});
-  head.add(new THREE.Mesh(headGeo, headMat));
+function createDisplaySurfaces()
+{
+    displaySurfaces = [];
+    // FRONT SCREEN
+    var frontScreen = new DisplaySurface("Front", 
+        new THREE.Vector3(-150.0, -150.0, -150.0), 
+        new THREE.Vector3(300.0, 0.0,   0.0), 
+        new THREE.Vector3(0.0, 300.0,   0.0),
+        new THREE.Color(0x00ffff));
+    displaySurfaces.push(frontScreen);
 
-  const eyeGeo = new THREE.SphereGeometry(3,16,16);
-  eyeL = new THREE.Mesh(eyeGeo, new THREE.MeshPhongMaterial({color:0xff0000}));
-  eyeL.position.set(-IPD/2,10,-6);
-  head.add(eyeL);
+    // LEFT SCREEN
+    var leftScreen = new DisplaySurface("Left",
+        new THREE.Vector3(-150.0, -150.0, 150.0), 
+        new THREE.Vector3(0.0, 0.0,  -300.0), 
+        new THREE.Vector3(0.0, 300.0,   0.0),
+        new THREE.Color(0xb9ff66));
+    displaySurfaces.push(leftScreen);
+	
+	// RIGHT SCREEN
+    var rightScreen = new DisplaySurface("Right",
+        new THREE.Vector3( 150.0, -150.0, -150.0),
+        new THREE.Vector3(0.0, 0.0, 300.0),
+        new THREE.Vector3(0.0, 300.0,   0.0),
+        new THREE.Color(0xed2939));
+    displaySurfaces.push(rightScreen);
 
-  eyeR = new THREE.Mesh(eyeGeo, new THREE.MeshPhongMaterial({color:0x0000ff}));
-  eyeR.position.set(+IPD/2,10,-6);
-  head.add(eyeR);
+    // FLOOR SCREEN
+    var bottomScreen = new DisplaySurface("Floor",
+        new THREE.Vector3(-150.0, -150.0, 150.0),
+        new THREE.Vector3(300.0, 0.0, 0.0),
+        new THREE.Vector3(0.0, 0.0, -300.0),
+        new THREE.Color(0xffff00));
+    displaySurfaces.push(bottomScreen);
+	
 }
-function createSurfaces() {
-  surfaces.push(
-    new DisplaySurface('Front', new THREE.Vector3(-150,-150,-150),
-                       new THREE.Vector3(300,0,0), new THREE.Vector3(0,300,0), 0x00ffff),
-    new DisplaySurface('Left',  new THREE.Vector3(-150,-150, 150),
-                       new THREE.Vector3(0,0,-300), new THREE.Vector3(0,300,0), 0xb9ff66),
-    new DisplaySurface('Right', new THREE.Vector3( 150,-150,-150),
-                       new THREE.Vector3(0,0, 300), new THREE.Vector3(0,300,0), 0xed2939),
-    new DisplaySurface('Floor', new THREE.Vector3(-150,-150, 150),
-                       new THREE.Vector3(300,0,0), new THREE.Vector3(0,0,-300), 0xffff00)
-  );
-}
-function createSurfaceScene() {
-  surfaceScene = new THREE.Scene();
-  surfaces.forEach((s,i) => {
-    const halfU = s.u.clone().multiplyScalar(0.5);
-    const halfV = s.v.clone().multiplyScalar(0.5);
-    const center = s.origin.clone().add(halfU).add(halfV);
 
-    const geo = new THREE.BoxGeometry(s.u.length(), s.v.length(), 0.01);
-    const mat = new THREE.MeshPhongMaterial({map:surfaceTargets[i].texture});
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(center);
-    if (s.name==='Left')  mesh.rotation.y = Math.PI/2;
-    if (s.name==='Right') mesh.rotation.y = -Math.PI/2;
-    if (s.name==='Floor') { mesh.rotation.x = Math.PI/2; mesh.rotation.z = Math.PI; }
-    surfaceScene.add(mesh);
-  });
-  addLights(surfaceScene);
+function getLeftEyePosition()
+{
+    var eye = eyeScene.getObjectByName("EyeL");
+    return eye.getWorldPosition(new THREE.Vector3());
 }
+
+function getRightEyePosition()
+{
+    var eye = eyeScene.getObjectByName("EyeR");
+    return eye.getWorldPosition(new THREE.Vector3());
+}
+
+function cameraFromViewProj(view, proj)
+{
+	var cam = camera.clone();
+    var inv = new THREE.Matrix4();
+	inv.copy(view).invert();
+	cam.position.set(inv.elements[12], inv.elements[13], inv.elements[14]);
+	cam.setRotationFromMatrix(view);
+	cam.projectionMatrix = proj.clone();
+	return cam;
+}
+
 function setupControllers() {
-  const factory = new XRControllerModelFactory();
-  const laser = () => {
-    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
-    return new THREE.Line(g, new THREE.LineBasicMaterial({color:0xff0000}));
-  };
+    const controllerModelFactory = new XRControllerModelFactory();
+    // Controller 1
+    controller1 = renderer.xr.getController(0);
+    displaySurfaceScene.add(controller1);
+    controllerGrip1 = renderer.xr.getControllerGrip(0);
+    controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+    displaySurfaceScene.add(controllerGrip1);
+    // Controller 2
+    controller2 = renderer.xr.getController(1);
+    displaySurfaceScene.add(controller2);
+    controllerGrip2 = renderer.xr.getControllerGrip(1);
+    controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+    displaySurfaceScene.add(controllerGrip2);
 
-  controller1 = renderer.xr.getController(0);
-  controller1.add(laser());
-  scene.add(controller1);
-  grip1 = renderer.xr.getControllerGrip(0);
-  grip1.add(factory.createControllerModel(grip1));
-  scene.add(grip1);
+    controller1.addEventListener('selectstart', onSelectStart);
+    controller2.addEventListener('selectstart', onSelectStart);
+    controller1.addEventListener('selectend', onSelectEnd);
+    controller2.addEventListener('selectend', onSelectEnd);
 
-  controller2 = renderer.xr.getController(1);
-  controller2.add(laser());
-  scene.add(controller2);
-  grip2 = renderer.xr.getControllerGrip(1);
-  grip2.add(factory.createControllerModel(grip2));
-  scene.add(grip2);
+    const geometry = new THREE.BufferGeometry().setFromPoints( [ new THREE.Vector3( 0, 0, 0 ), new THREE.Vector3( 0, 0, - 1 ) ] );
+    const line = new THREE.Line(geometry);
+    line.name = 'line';
 
-  const grab = (c) => {
-    const ray = new THREE.Raycaster();
-    const mat = new THREE.Matrix4().extractRotation(c.matrixWorld);
-    ray.ray.origin.setFromMatrixPosition(c.matrixWorld);
-    ray.ray.direction.set(0,0,-1).applyMatrix4(mat);
-    const hits = ray.intersectObject(teapot);
-    if (hits.length) {
-      grabbed = teapot;
-      grabbed.material.emissive.set(0x00ff00);
-      grabController = c;
-      const cp = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
-      grabOffset.copy(teapot.position).sub(cp);
-    }
-  };
-  const release = () => {
-    if (grabbed) {
-      grabbed.material.emissive.set(0x000000);
-      grabbed = grabController = null;
-    }
-  };
-  controller1.addEventListener('selectstart',()=>grab(controller1));
-  controller2.addEventListener('selectstart',()=>grab(controller2));
-  controller1.addEventListener('selectend',release);
-  controller2.addEventListener('selectend',release);
+    controller1.add(line.clone());
+    controller2.add(line.clone());
+
+    raycaster = new THREE.Raycaster();
 }
 
-/* --------------------------------------------------------------
-   Animation loop
-   -------------------------------------------------------------- */
-function animate(time, frame) {
-  // ----- VR controller grab (XR frame) -----
-  if (frame && grabbed && grabController) {
-    const pose = frame.getPose(grabController.targetRaySpace, renderer.xr.getReferenceSpace());
-    if (pose) {
-      const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-      const p = new THREE.Vector3().setFromMatrixPosition(m);
-      teapot.position.copy(p).add(grabOffset);
-    }
-  }
+function onSelectStart(event) {
+    const controller = event.target;
 
-  // ----- sync virtual head with HMD -----
-  if (frame) {
-    const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
-    if (pose) {
-      const view = pose.views[0];
-      head.position.fromArray(view.transform.position);
-      head.quaternion.fromArray(view.transform.orientation);
-    }
-  }
+    const intersections = getIntersections(controller);
 
-  renderAll();
+    if (intersections.length > 0) {
+        const intersection = intersections[0];
+
+        const object = intersection.object;
+        object.material.emissive.b = 1;
+
+        // No reparenting: keep the object in its original scene hierarchy
+        controller.updateMatrixWorld(true);
+        object.updateMatrixWorld(true);
+
+        // Save selection and relative offset so object follows controller without changing parent
+        controller.userData.selected = object;
+        selectedObject = object;
+        grabbingController = controller;
+        selectionOffset.copy(controller.matrixWorld).invert().multiply(object.matrixWorld);
+        selectedObject.matrixAutoUpdate = false;
+    }
+
+    controller.userData.targetRayMode = event.data.targetRayMode;
 }
 
-/* --------------------------------------------------------------
-   Rendering (desktop + VR)
-   -------------------------------------------------------------- */
-function renderAll() {
-  const gl = renderer.getContext();
+function onSelectEnd(event) {
+    const controller = event.target;
 
-  // 1. clear main view
-  renderer.setClearColor(0x404040);
-  renderer.clear();
+    if ( controller.userData.selected !== undefined ) {
+        const object = controller.userData.selected;
+        object.material.emissive.b = 0;
+        // Ensure it remains under the main group (idempotent if already there)
+        if (object.parent !== group) group.attach( object );
 
-  // 2. render the virtual world (optional)
-  if (showScene) renderer.render(scene, camera);
+        controller.userData.selected = undefined;
+    }
 
-  // 3. render each wall (left eye → red, right eye → cyan)
-  surfaces.forEach((s, i) => {
-    const rt = surfaceTargets[i];
-    renderer.setRenderTarget(rt);
+    // Restore object update behavior and clear selection state
+    if (selectedObject) {
+        selectedObject.matrixAutoUpdate = true;
+    }
+    selectedObject = null;
+    grabbingController = null;
+}
+
+function getIntersections(controller) {
+    controller.updateMatrixWorld();
+
+    raycaster.setFromXRController(controller);
+
+    return raycaster.intersectObjects(group.children, false);
+}
+
+function intersectObjects(controller) {
+    if (controller.userData.targetRayMode === 'screen') return;
+
+    if (controller.userData.selected !== undefined) return;
+
+    const line = controller.getObjectByName('line');
+    const intersections = getIntersections(controller);
+
+    if (intersections.length > 0) {
+        const intersection = intersections[0];
+
+        const object = intersection.object;
+        object.material.emissive.r = 1;
+        intersected.push( object );
+
+        line.scale.z = intersection.distance;
+    } else {
+        line.scale.z = 5;
+    }
+}
+
+function cleanIntersected() {
+    while ( intersected.length ) {
+        const object = intersected.pop();
+        object.material.emissive.r = 0;
+    }
+}
+
+// refresh function
+var animate = function () {
+    cleanIntersected();
+
+    if (renderer.xr.getSession()) {
+        intersectObjects(controller1);
+        intersectObjects(controller2);
+    }
+
+    var gl = renderer.getContext();
+    renderer.setAnimationLoop(animate);
+
+    // 1. render scene objects
+	renderer.setClearColor(0x808080);
     renderer.clear();
+    if (showScene)
+        renderer.render(scene, camera);
+    
+    // 2. render scene objects onto a texture, for each target
+    for (let [index, displaySurface] of displaySurfaces.entries())
+    {
+        renderer.setRenderTarget(displaySurfaceTargets[index]);
+        renderer.setClearColor(0x404040);
+        renderer.clear();
 
-    // left eye (red channel)
-    gl.colorMask(true, false, false, false);
-    const leftEye = eyeL.getWorldPosition(new THREE.Vector3());
-    const leftCam = makeCam(s.viewMatrix(leftEye), s.projectionMatrix(leftEye,1,10000));
-    renderer.render(scene, leftCam);
+		// left eye on RED channel
+        gl.colorMask(1, 0, 0, 0); 
+		var eye = getLeftEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+        var leftCamera = cameraFromViewProj(view, proj);
+        renderer.render(scene, leftCamera); 
+    
+		// right eye on GREEN, BLUE channels
+		gl.colorMask(0, 1, 1, 0);
+		var eye = getRightEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+        var rightCamera = cameraFromViewProj(view, proj);
+        renderer.clearDepth();
+        renderer.render(scene, rightCamera); 
+		
+        gl.colorMask(1, 1, 1, 0);
+    }
+    // restore state
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(0x000000);
+  
+    // 3. render display surfaces as (textured) quads
+    renderer.render(displaySurfaceScene, camera);
+	
+	// 4. render eyes
+    renderer.render(eyeScene, camera);
 
-    // right eye (green+blue → cyan)
-    gl.colorMask(false, true, true, false);
-    const rightEye = eyeR.getWorldPosition(new THREE.Vector3());
-    const rightCam = makeCam(s.viewMatrix(rightEye), s.projectionMatrix(rightEye,1,10000));
-    renderer.clearDepth();
-    renderer.render(scene, rightCam);
+    // 5. Update frustum lines if enabled
+    if (showEyeFrustrum > 0) {
+        // Remove old lines
+        for (var line of frustumLines) {
+            eyeScene.remove(line);
+        }
+        frustumLines = [];
+        
+        // Determine which eye to use: 1 = left, 2 = right
+        var eye = (showEyeFrustrum == 1) ? getLeftEyePosition() : getRightEyePosition();
+        
+        // Show only the selected surface
+        var lines = displaySurfaces[currentSurface].showEyeFrustrum(eye);
+        eyeScene.add(lines);
+        frustumLines.push(lines);
+    } else {
+        // Remove all lines
+        for (var line of frustumLines) {
+            eyeScene.remove(line);
+        }
+        frustumLines = [];
+    }
 
-    gl.colorMask(true,true,true,true);
-  });
-  renderer.setRenderTarget(null);
+    if (selectedObject && grabbingController) {
+        // Follow controller without changing the object's parent/scene
+        // world = controllerWorld * selectionOffset
+        const world = tempMatrix2.multiplyMatrices(grabbingController.matrixWorld, selectionOffset);
+        // local = parentInv * world
+        const parentInv = tempMatrix.copy(selectedObject.parent.matrixWorld).invert();
+        const local = world.clone().premultiply(parentInv);
 
-  // 4. draw the textured walls
-  renderer.render(surfaceScene, camera);
+        selectedObject.matrix.copy(local);
+        selectedObject.matrix.decompose(selectedObject.position, selectedObject.quaternion, selectedObject.scale);
+    }
 
-  // 5. draw head / eyes
-  renderer.render(scene, camera);   // head is in the same scene as teapot
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        positions[i * 3]     += velocities[i * 3];
+        positions[i * 3 + 1] += velocities[i * 3 + 1];
+        positions[i * 3 + 2] += velocities[i * 3 + 2];
+        if (positions[i * 3] > max.x) positions[i * 3] = min.x;
+        if (positions[i * 3] < min.x) positions[i * 3] = max.x;
+        if (positions[i * 3 + 1] > max.y) positions[i * 3 + 1] = min.y;
+        if (positions[i * 3 + 1] < min.y) positions[i * 3 + 1] = max.y;
+        if (positions[i * 3 + 2] > max.z) positions[i * 3 + 2] = min.z;
+        if (positions[i * 3 + 2] < min.z) positions[i * 3 + 2] = max.z;
 
-  // 6. optional frustum visualisation
-  frustumObjects.forEach(o=>scene.remove(o));
-  frustumObjects = [];
-  if (showFrustum>0) {
-    const eye = (showFrustum===1) ? eyeL.getWorldPosition(new THREE.Vector3())
-                                 : eyeR.getWorldPosition(new THREE.Vector3());
-    const grp = surfaces[curSurf].frustumGroup(eye);
-    scene.add(grp);
-    frustumObjects.push(grp);
-  }
-}
-function makeCam(view, proj) {
-  const cam = camera.clone();
-  const inv = new THREE.Matrix4().copy(view).invert();
-  cam.position.setFromMatrixPosition(inv);
-  cam.setRotationFromMatrix(view);
-  cam.projectionMatrix.copy(proj);
-  return cam;
-}
+        dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        dummy.scale.set(scales[i], scales[i], scales[i]);
+        dummy.updateMatrix();
+        particleCubes.setMatrixAt(i, dummy.matrix);
+    }
+    particleCubes.instanceMatrix.needsUpdate = true;
 
-/* --------------------------------------------------------------
-   UI
-   -------------------------------------------------------------- */
-function onResize() {
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-}
-function onKey(e) {
-  switch(e.code){
-    case 'KeyL': camera.position.copy(eyeL.getWorldPosition(new THREE.Vector3())); break;
-    case 'KeyR': camera.position.copy(eyeR.getWorldPosition(new THREE.Vector3())); break;
-    case 'KeyS': showScene = !showScene; break;
-    case 'KeyF': showFrustum = (showFrustum+1)%3; break;
-    case 'KeyG': if(showFrustum) curSurf = (curSurf+1)%surfaces.length; break;
-  }
-}
-</script>
-</body>
+
+
+	
+};
+
+
+window.addEventListener( 'keydown', function ( event ) 
+{
+    switch ( event.code ) {
+        case 'KeyF':
+            showScene = true;
+            showEyeFrustrum = (showEyeFrustrum + 1)%3;
+            break;
+
+        case 'KeyG':
+            showScene = true;
+            if (showEyeFrustrum > 0) currentSurface = (currentSurface + 1) % displaySurfaces.length;
+            break;
+
+        case 'KeyL': 
+            var eye = getLeftEyePosition();
+            camera.position.set(eye.x, eye.y, eye.z); 
+            showEyeFrustrum = 0;
+            currentSurface = 0;
+            break;
+            
+        case 'KeyR': 
+            var eye = getRightEyePosition();
+            camera.position.set(eye.x, eye.y, eye.z); 
+            showEyeFrustrum = 0;
+            currentSurface = 0;
+            break;
+            
+        case 'KeyS':
+            showScene = !showScene;
+            if (!showScene) {
+                showEyeFrustrum = 0;
+                currentSurface = 0;
+            }
+            break;
+            
+        case 'KeyT':
+            var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
+            console.log("View matrices:");
+            console.log(viewF);
+            console.log(viewL);
+            console.log(viewR);
+            console.log(viewB);
+
+            var projF = displaySurfaces[0].projectionMatrix(new THREE.Vector3(50, 20, 100), 0.1, 100);
+            var projL = displaySurfaces[1].projectionMatrix(new THREE.Vector3(50, 20, 100), 0.1, 100);
+            var projR = displaySurfaces[2].projectionMatrix(new THREE.Vector3(50, 20, 100), 0.1, 100);
+            var projB = displaySurfaces[3].projectionMatrix(new THREE.Vector3(50, 20, 100), 0.1, 100);
+            console.log("Projection matrices:");
+            console.log(projF);
+            console.log(projL);
+            console.log(projR);
+            console.log(projB);
+
+            break;
+        
+        case 'ArrowLeft':
+            console.log("LEFT");
+            break;
+
+        case 'ArrowUp':
+            console.log("UP");
+            break;
+
+        case 'ArrowDown':
+            console.log("DOWN");
+            break;
+
+        case 'ArrowRight':
+            console.log("RIGHT");
+            break;                         
+    }
+});
+
+
+
+createRenderer();  			// create WebGL renderer
+createDisplaySurfaces();	// Display surfaces
+const PARTICLE_COUNT = 200;
+const bounds = getCaveBoundsFromSurfaces();
+const { mesh: particleCubes, positions, velocities, scales, min, max } = setupCubeParticles(PARTICLE_COUNT, bounds);
+createDisplaySurfaceTargets(); // Textures for the display surfaces
+createDisplaySurfaceScene();	// 3D objects for the display surfaces
+createEyeScene();	// spheres representing head + eyes
+createScene();		// some objects to test (teapot...)
+setupControllers();
+createCamera();		// a third-person camera
+enableOrbitCamera(camera, renderer);  // basic camera control
+addDragControlToObjects();	// allow some objects to be dragged
+animate();
+
+
+		</script>
+    </body>
 </html>
