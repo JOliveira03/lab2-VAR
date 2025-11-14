@@ -558,10 +558,16 @@ function onSelectEnd(event) {
 function getIntersections(controller) {
     controller.updateMatrixWorld();
 
-    raycaster.setFromXRController(controller);
+    // Set up ray from controller
+    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+    raycaster.ray.direction.set(0, 0, -1)
+        .applyMatrix4(controller.matrixWorld)
+        .sub(raycaster.ray.origin)
+        .normalize();
 
     return raycaster.intersectObjects(group.children, false);
 }
+
 
 function intersectObjects(controller) {
     if (controller.userData.targetRayMode === 'screen') return;
