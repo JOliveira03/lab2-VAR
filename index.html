@@ -177,6 +177,8 @@ var showEyeFrustrum = 0; // 0 = off, 1 = left eye, 2 = right eye
 var frustumLines = [];
 var currentSurface = 0; // 0 = front, 1 = left, 2 = right, 3 = floor
 var controller1, controller2, controllerGrip1, controllerGrip2;
+var locomotion = [0, 0, 0];
+var dolly, dummyCam;
 let raycaster;
 var group;
 const intersected = [];
@@ -282,7 +284,6 @@ function createLights(scn)
     scn.add(dirLight);
 }
 
-
 function createScene()
 {
     scene = new THREE.Scene();
@@ -295,108 +296,51 @@ function createScene()
     teapot.position.z-=70;
 
     group.add( teapot );
-    group.add( particleCubes );
     scene.add( group );
                 
     createLights(scene);
 }
 
-
 // create a scene with 3D objects representing the display surfaces
-function createDisplaySurfaceScene()
-{
-    displaySurfaceScene = new THREE.Scene();
+function createDisplaySurfaceScene() {
+    displaySurfaceScene = new THREE.Scene(); // keeps your previous desktop logic
 
-    // add display surfaces
-    for (var [index, displaySurface] of displaySurfaces.entries())
-    {
+    for (var [index, displaySurface] of displaySurfaces.entries()) {
         var origin = displaySurface.origin;
         var u = displaySurface.u;
         var v = displaySurface.v;
-  
+
         var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
-        var material = new THREE.MeshPhongMaterial( {map: displaySurfaceTargets[index].texture} );
-        var cube = new THREE.Mesh( geometry, material );
+        var material = new THREE.MeshPhongMaterial({
+            map: displaySurfaceTargets[index].texture  // Use render target as wall map
+        });
+        var cube = new THREE.Mesh(geometry, material);
         cube.name = displaySurface.name;
-        if (displaySurface.name == "Left")
-            cube.rotation.y = Math.PI / 2;
-        if (displaySurface.name == "Right")
-            cube.rotation.y = - Math.PI / 2;
+
+        // Orient the cube
+        if (displaySurface.name == "Left") cube.rotation.y = Math.PI / 2;
+        if (displaySurface.name == "Right") cube.rotation.y = -Math.PI / 2;
         if (displaySurface.name == "Floor") {
-            cube.rotation.x =  Math.PI / 2;
-            cube.rotation.z =  Math.PI ;
+            cube.rotation.x = Math.PI / 2;
+            cube.rotation.z = Math.PI;
         }
+
         var uHalf = u.clone().multiplyScalar(0.5);
         var vHalf = v.clone().multiplyScalar(0.5);
         var center = new THREE.Vector3().addVectors(origin, uHalf);
         center.add(vHalf);
         cube.position.set(center.x, center.y, center.z);
-        
-        displaySurfaceScene.add(cube);
 
-        // ---- THE FIX: Also add to main scene for VR! ----
-        scene.add(cube); // Add each display surface mesh to your main scene
+        // ---- add to scenes ----
+        displaySurfaceScene.add(cube);
+        scene.add(cube); // THE KEY POINT: add every display surface mesh to your main scene for VR
     }
-    
+
     createLights(displaySurfaceScene);
 }
 
 
 
-function getCaveBoundsFromSurfaces() {
-    const points = [];
-    for (const surf of displaySurfaces) {
-        points.push(
-            surf.origin.clone(),
-            surf.origin.clone().add(surf.u),
-            surf.origin.clone().add(surf.v),
-            surf.origin.clone().add(surf.u).add(surf.v)
-        );
-    }
-    let min = points[0].clone();
-    let max = points[0].clone();
-    for (const v of points) {
-        min.min(v);
-        max.max(v);
-    }
-    return {min, max};
-}
-
-
-function setupCubeParticles(cubeCount, bounds) {
-    const { min, max } = bounds;
-    const geometry = new THREE.BoxGeometry(6, 6, 6);
-    const material = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.8,
-        metalness: 0.2
-    });
-    const mesh = new THREE.InstancedMesh(geometry, material, cubeCount);
-
-    const positions = new Float32Array(cubeCount * 3);
-    const velocities = new Float32Array(cubeCount * 3);
-    const scales = new Float32Array(cubeCount);
-    const colors = [];
-
-    for (let i = 0; i < cubeCount; i++) {
-        positions[i * 3]     = Math.random() * (max.x - min.x) + min.x;
-        positions[i * 3 + 1] = Math.random() * (max.y - min.y) + min.y;
-        positions[i * 3 + 2] = Math.random() * (max.z - min.z) + min.z;
-        velocities[i * 3]     = (Math.random() - 0.5) * 0.2;
-        velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.2;
-        velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
-
-        scales[i] = Math.random() * 1.6 + 0.4; // (0.4–2) size
-        colors[i] = new THREE.Color(Math.random(), Math.random(), Math.random());
-        mesh.setColorAt(i, colors[i]);
-    }
-    mesh.instanceColor.needsUpdate = true;
-
-    return { mesh, positions, velocities, scales, colors, min, max };
-}
-
-
- 
 function createDisplaySurfaceTargets()
 {
     const SIZE = 1024;  // texture resolution
@@ -411,6 +355,14 @@ function createCamera()
     camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
     camera.position.set( 100, 100, 300 );
     camera.lookAt( 0, 0, 0 );
+
+    dolly = new THREE.Object3D();
+    dolly.position.z = 5;
+    dolly.add(camera);
+    scene.add(dolly);
+
+    dummyCam = new THREE.Object3D();
+    camera.add(dummyCam);
 }
 
 function createDisplaySurfaces()
@@ -475,12 +427,14 @@ function cameraFromViewProj(view, proj)
 
 function setupControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
+
     // Controller 1
     controller1 = renderer.xr.getController(0);
     displaySurfaceScene.add(controller1);
     controllerGrip1 = renderer.xr.getControllerGrip(0);
     controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
     displaySurfaceScene.add(controllerGrip1);
+    
     // Controller 2
     controller2 = renderer.xr.getController(1);
     displaySurfaceScene.add(controller2);
@@ -501,6 +455,58 @@ function setupControllers() {
     controller2.add(line.clone());
 
     raycaster = new THREE.Raycaster();
+}
+
+function onJoystick() {
+    var handedness = "unknown";
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        let xrCamera = renderer.xr.getCamera(camera);
+
+        for (const source of session.inputSources) {
+            if (source && source.handedness) {
+                handedness = source.handedness;
+            }
+            if (!source.gamepad) continue;
+
+            const data = {
+                handedness: handedness,
+                buttons: source.gamepad.buttons.map((b) => b.value),
+                axes: source.gamepad.axes.slice(2)
+            };
+            
+            if (data.handedness == "left") {
+                locomotion[0] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+                locomotion[2] = (Math.abs(data.axes[0]) > 0.4) ? data.axes[0] : 0.0;
+            }
+            else if (data.handedness == "right") {
+                locomotion[1] = (Math.abs(data.axes[1]) > 0.4) ? data.axes[1] : 0.0;
+            }
+        }
+    }
+}
+
+function characterMove(dt) {
+    const session = renderer.xr.getSession();
+
+    if (session) {
+        const speed = 10;
+        
+        const quaternion = dolly.quaternion.clone();
+        const targetQuaternion = new THREE.Quaternion();
+        dolly.quaternion.copy(dummyCam.getWorldQuaternion(targetQuaternion));
+        
+        // Locomotion X/Z (left joystick) - relative to camera
+        dolly.translateZ(locomotion[0] * dt * speed);
+        dolly.translateX(locomotion[2] * dt * speed);
+        
+        // Restore original rotation before moving y
+        dolly.quaternion.copy(quaternion);
+        
+        // Locomotion Y (right joystick) - absolute
+        dolly.position.y += -locomotion[1] * dt * speed;
+    }
 }
 
 function onSelectStart(event) {
@@ -588,6 +594,8 @@ function cleanIntersected() {
 // refresh function
 var animate = function () {
     cleanIntersected();
+    onJoystick();
+    characterMove(clock.getDelta());
 
     if (renderer.xr.getSession()) {
         intersectObjects(controller1);
@@ -673,28 +681,6 @@ var animate = function () {
         selectedObject.matrix.copy(local);
         selectedObject.matrix.decompose(selectedObject.position, selectedObject.quaternion, selectedObject.scale);
     }
-
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        positions[i * 3]     += velocities[i * 3];
-        positions[i * 3 + 1] += velocities[i * 3 + 1];
-        positions[i * 3 + 2] += velocities[i * 3 + 2];
-        if (positions[i * 3] > max.x) positions[i * 3] = min.x;
-        if (positions[i * 3] < min.x) positions[i * 3] = max.x;
-        if (positions[i * 3 + 1] > max.y) positions[i * 3 + 1] = min.y;
-        if (positions[i * 3 + 1] < min.y) positions[i * 3 + 1] = max.y;
-        if (positions[i * 3 + 2] > max.z) positions[i * 3 + 2] = min.z;
-        if (positions[i * 3 + 2] < min.z) positions[i * 3 + 2] = max.z;
-
-        dummy.position.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-        dummy.scale.set(scales[i], scales[i], scales[i]);
-        dummy.updateMatrix();
-        particleCubes.setMatrixAt(i, dummy.matrix);
-    }
-    particleCubes.instanceMatrix.needsUpdate = true;
-
-
-
 	
 };
 
@@ -758,7 +744,7 @@ window.addEventListener( 'keydown', function ( event )
             break;
         
         case 'ArrowLeft':
-            console.log("LEFT");
+            characterMove();
             break;
 
         case 'ArrowUp':
@@ -777,19 +763,16 @@ window.addEventListener( 'keydown', function ( event )
 
 
 
-createRenderer();  			// create WebGL renderer
-createDisplaySurfaces();	// Display surfaces
-const PARTICLE_COUNT = 200;
-const bounds = getCaveBoundsFromSurfaces();
-const { mesh: particleCubes, positions, velocities, scales, min, max } = setupCubeParticles(PARTICLE_COUNT, bounds);
-createDisplaySurfaceTargets(); // Textures for the display surfaces
-createScene();		// some objects to test (teapot...)
-createDisplaySurfaceScene();	// 3D objects for the display surfaces
-createEyeScene();	// spheres representing head + eyes
+createRenderer();
+createDisplaySurfaces();
+createDisplaySurfaceTargets();
+createScene();            // CREATES 'scene' AND 'group'
+createDisplaySurfaceScene();  // MUST RUN AFTER createScene()
+createEyeScene();
 setupControllers();
-createCamera();		// a third-person camera
-enableOrbitCamera(camera, renderer);  // basic camera control
-addDragControlToObjects();	// allow some objects to be dragged
+createCamera();
+enableOrbitCamera(camera, renderer);
+addDragControlToObjects();
 animate();
 
 
