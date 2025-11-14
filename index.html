@@ -7,7 +7,7 @@
 </head>
 <body>
 <div id="info">
-	version 1 CAVE Simulator. The head and teapot are draggable. <br />
+	CAVE Simulator. The head and teapot are draggable. <br />
 	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene | "F" toggle show frustrum of each eye | "G" toggle between surfaces (Front/Left/Right/Floor)   <br />
 </div>
 
@@ -302,43 +302,72 @@ function createScene()
 }
 
 // create a scene with 3D objects representing the display surfaces
-function createDisplaySurfaceScene() {
-    displaySurfaceScene = new THREE.Scene(); // keeps your previous desktop logic
+function createDisplaySurfaceScene()
+{
+    displaySurfaceScene = new THREE.Scene();
 
-    for (var [index, displaySurface] of displaySurfaces.entries()) {
+    // add display surfaces
+    for (var [index, displaySurface] of displaySurfaces.entries())
+    {
         var origin = displaySurface.origin;
         var u = displaySurface.u;
         var v = displaySurface.v;
-
+  
         var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
-        var material = new THREE.MeshPhongMaterial({
-            map: displaySurfaceTargets[index].texture  // Use render target as wall map
-        });
-        var cube = new THREE.Mesh(geometry, material);
+        var material = new THREE.MeshPhongMaterial( {map: displaySurfaceTargets[index].texture} );
+        var cube = new THREE.Mesh( geometry, material );
         cube.name = displaySurface.name;
-
-        // Orient the cube
-        if (displaySurface.name == "Left") cube.rotation.y = Math.PI / 2;
-        if (displaySurface.name == "Right") cube.rotation.y = -Math.PI / 2;
-        if (displaySurface.name == "Floor") {
-            cube.rotation.x = Math.PI / 2;
-            cube.rotation.z = Math.PI;
-        }
-
-        var uHalf = u.clone().multiplyScalar(0.5);
-        var vHalf = v.clone().multiplyScalar(0.5);
-        var center = new THREE.Vector3().addVectors(origin, uHalf);
-        center.add(vHalf);
-        cube.position.set(center.x, center.y, center.z);
-
-        // ---- add to scenes ----
+        if (displaySurface.name == "Left")
+            cube.rotation.y = Math.PI / 2;
+       
+		if (displaySurface.name == "Right")
+            cube.rotation.y = - Math.PI / 2;
+			
+		if (displaySurface.name == "Floor")
+		{
+            cube.rotation.x =  Math.PI / 2;
+			cube.rotation.z =  Math.PI ;
+		}
+       
+	    var uHalf = u.clone().multiplyScalar(0.5);
+		var vHalf = v.clone().multiplyScalar(0.5);
+		var center = new THREE.Vector3().addVectors(origin, uHalf);
+		center.add(vHalf);
+		cube.position.set(center.x, center.y, center.z);
+		
         displaySurfaceScene.add(cube);
-        scene.add(cube); // THE KEY POINT: add every display surface mesh to your main scene for VR
     }
-
+    
     createLights(displaySurfaceScene);
 }
 
+function addWallsToScene() {
+    for (const displaySurface of displaySurfaces) {
+        const u = displaySurface.u;
+        const v = displaySurface.v;
+        // Use PlaneGeometry for a simple wall
+        const geometry = new THREE.PlaneGeometry(u.length(), v.length());
+
+        // Use a simple color or material for now
+        const material = new THREE.MeshPhongMaterial({ color: displaySurface.color });
+        const wall = new THREE.Mesh(geometry, material);
+
+        wall.name = displaySurface.name;
+
+        // Set center position of the wall
+        const uHalf = u.clone().multiplyScalar(0.5);
+        const vHalf = v.clone().multiplyScalar(0.5);
+        const center = new THREE.Vector3().addVectors(displaySurface.origin, uHalf).add(vHalf);
+        wall.position.copy(center);
+
+        // Orient the wall using its u and v vectors
+        // This sets the wall's orientation based on your surface's axes
+        const normal = new THREE.Vector3().crossVectors(u, v).normalize();
+        wall.lookAt(center.clone().add(normal));
+
+        scene.add(wall);
+    }
+}
 
 
 function createDisplaySurfaceTargets()
@@ -558,16 +587,10 @@ function onSelectEnd(event) {
 function getIntersections(controller) {
     controller.updateMatrixWorld();
 
-    // Set up ray from controller
-    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1)
-        .applyMatrix4(controller.matrixWorld)
-        .sub(raycaster.ray.origin)
-        .normalize();
+    raycaster.setFromXRController(controller);
 
     return raycaster.intersectObjects(group.children, false);
 }
-
 
 function intersectObjects(controller) {
     if (controller.userData.targetRayMode === 'screen') return;
@@ -769,16 +792,17 @@ window.addEventListener( 'keydown', function ( event )
 
 
 
-createRenderer();
-createDisplaySurfaces();
-createDisplaySurfaceTargets();
-createScene();            // CREATES 'scene' AND 'group'
-createDisplaySurfaceScene();  // MUST RUN AFTER createScene()
-createEyeScene();
+createRenderer();  			// create WebGL renderer
+createDisplaySurfaces();	// Display surfaces
+createDisplaySurfaceTargets(); // Textures for the display surfaces
+createDisplaySurfaceScene();	// 3D objects for the display surfaces
+createEyeScene();	// spheres representing head + eyes
+createScene();		// some objects to test (teapot...)
+addWallsToScene
 setupControllers();
-createCamera();
-enableOrbitCamera(camera, renderer);
-addDragControlToObjects();
+createCamera();		// a third-person camera
+enableOrbitCamera(camera, renderer);  // basic camera control
+addDragControlToObjects();	// allow some objects to be dragged
 animate();
 
 
