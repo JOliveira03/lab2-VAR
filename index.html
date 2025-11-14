@@ -585,12 +585,19 @@ function onSelectEnd(event) {
 }
 
 function getIntersections(controller) {
-    controller.updateMatrixWorld();
+    // Get the controller's world position and direction
+    const tempMatrix = new THREE.Matrix4();
+    tempMatrix.identity().extractRotation(controller.matrixWorld);
 
-    raycaster.setFromXRController(controller);
+    const rayOrigin = new THREE.Vector3();
+    rayOrigin.setFromMatrixPosition(controller.matrixWorld);
 
+    const rayDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
+
+    raycaster.set(rayOrigin, rayDirection);
     return raycaster.intersectObjects(group.children, false);
 }
+
 
 function intersectObjects(controller) {
     if (controller.userData.targetRayMode === 'screen') return;
